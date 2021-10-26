@@ -1,0 +1,1696 @@
+---
+output: html_document
+---
+
+
+```{r, include=FALSE, warning=FALSE}
+
+options(htmltools.dir.version = FALSE)
+
+### Tamanho padrão dos gráficos -----------------
+knitr::opts_chunk$set(
+  fig.width=9,
+  fig.height=6, 
+  fig.retina=3,
+ # fig.showtext = TRUE,
+  out.width = "100%",
+  cache = FALSE,
+  echo = TRUE,
+  message = FALSE, 
+  warning = FALSE,
+  fig.show = TRUE,
+  hiline = TRUE
+)
+
+
+library(xaringanthemer)
+
+xaringanthemer::style_mono_light(base_color = "#3c3c3c")
+
+
+library(tidyverse)
+library(Cairo)
+library(gridExtra)
+library(lubridate)
+library(kableExtra)
+library(readxl)
+library(formattable)
+library(sidrar)
+library(rbcb)
+library(ipeadatar)
+library(fredr)
+library(ggthemes)
+library(qrmdata)
+library(quantmod)
+library(tidyquant)
+library(ralger)
+library(PerformanceAnalytics)
+library(gridExtra)
+library(reticulate)
+library(Quandl)
+library(timetk)
+library(scales)
+library(GetTDData)
+library(RColorBrewer)
+library(ggrepel)
+library(XML)
+library(glue)
+library(bizdays)
+
+options(scipen = 999)
+
+
+```
+
+
+```{r, include=FALSE, warning=FALSE}
+
+# segunda-feira
+dt_inicio_semana = as.Date("2021-10-18")
+
+# sexta-feira
+dt_fim_semana = as.Date("2021-10-22")
+dt_commoditie_final_semana = "22/10/2021"
+
+
+#setwd("C:\\Users\\pc\\Desktop\\BP_Investimentos\\BPMacro\\docs")
+#setwd("C:\\Users\\BI-Assessor\\Desktop\\BP_Investimentos\\BPMacro\\docs")
+
+
+# Configura API Fred
+fred_key <- "5b0e1127100c4f575b6f76a23fcdfcfe"
+fredr_set_key(fred_key)
+
+
+################################################################################
+######## Função - Leitura ------------------------------------------------------
+################################################################################
+
+LimpaBase <- function(Tabela){
+  
+  Tabela %>%
+    mutate(Semana = epiweek(date),
+           Ano = year(date)) %>%
+    filter(!is.na(value))
+}
+
+TabelaVix <- data.frame(date = as.Date("2021-09-24"), # inserir última sexta-feira
+                        series_id = "VIXCLS",
+                        value = 17.75, # inserir último valor da sexta-feira
+                        realtime_start = NA,
+                        realtime_end = NA,
+                        Semana = 38, # aumentar número da semana
+                        Ano = 2021)
+
+################################################################################
+######## Baixa Tabelas ---------------------------------------------------------
+################################################################################
+
+DJCA <- fredr("DJCA") %>%
+  LimpaBase()
+
+SP500 <- fredr("SP500") %>%
+  LimpaBase()
+
+Vix <- fredr("VIXCLS") %>%
+  LimpaBase() %>%
+  bind_rows(TabelaVix)
+
+Ibov <- ipeadata("GM366_IBVSP366") %>%
+  LimpaBase()
+
+
+Dolar <- ipeadata("GM366_ERC366") %>%
+  LimpaBase()
+
+
+Euro <- ipeadata("GM366_EUROC366") %>%
+  LimpaBase()
+
+
+################################################################################
+####### Define função que plota retorno semanal --------------------------------
+################################################################################
+
+PlotaRetornoSemanal <- function(Tabela, Nome, Fonte, step) {
+  
+  DataMaisRecente = as.character.Date(max(Tabela$date[is.numeric(Tabela$value)]), 
+                                      format = "%d/%m/%Y")
+  
+  
+  ### condição para registrar negativos e positivos com cores diferentes ### 
+  
+  Tabela <- Tabela %>%
+    group_by(Ano, Semana) %>%
+    filter(date == max(date)) %>%
+    ungroup() %>%
+    mutate(VarSemanal = value/lag(value)-1) %>%
+    filter(Ano == 2021) %>%
+    select(VarSemanal, Semana) %>% 
+    mutate(Color = ifelse(VarSemanal < 0, "negativo","green"))
+    
+
+    ggplot(Tabela, aes(x = Semana,  y = VarSemanal, fill = Color)) + 
+    geom_col() + 
+    geom_text(aes(label = paste0(format(round(VarSemanal*100,2), big.mark = ".", decimal.mark = ","),"%"),
+                  vjust = ifelse(VarSemanal >= 0, -0.5, 1.5)),size = 3,
+                  color = 'black',fontface='bold') +
+    scale_fill_manual(values = c("#27ae60","#c0392b")) +
+    geom_hline(yintercept = 0) +
+    theme_minimal() +
+    scale_y_continuous(labels = scales::percent_format(big.mark = ".", decimal.mark = ","),
+                       breaks = seq(-1,1,step),
+                       limits = c(min(Tabela$VarSemanal)-0.005, max(Tabela$VarSemanal)+0.005)) + 
+  theme(legend.position = "none",
+          strip.text = element_text(face = "bold", color = "#2E2C2F", size = "11"),
+          plot.title = element_text(size=15, hjust = 0.5, face="bold"),
+          axis.title.x = element_text(face="bold", color="#000000",size = 9),
+          axis.title.y = element_text(face="bold", color="#000000",size = 9),
+          plot.subtitle = element_text(size=9, hjust = 0.5, face="bold"),
+          axis.text.y = element_text(face="bold", color="#000000",size = 9),
+          axis.text.x = element_text(face="bold", color="#000000",size = 9)) +
+    labs(title = paste(Nome, "-", "Variação Semanal"), y = "Variação",
+         subtitle = paste("Última atualização:", 
+                          DataMaisRecente),
+         caption = paste("Fonte:", Fonte, "| Elaboração: BP Investimentos")) +
+    scale_x_continuous(breaks = 1:52, expand = c(0,0.5)) +
+    theme_xaringan(text_font_size = 10)
+  
+
+}
+
+
+####################################################################################
+###### EWZ -------------------------------------------------------------------------
+####################################################################################
+
+
+var_semanal_ewz <- function() {
+  
+  
+  # Obtain Treasury yield data
+  ewz <- getSymbols(Symbols = "EWZ", src = "yahoo", auto.assign = FALSE)
+  
+  
+  # coluna com data
+  ewz <- data.frame(date=index(ewz), coredata(ewz))
+  
+  # filtrando a partir de 2020
+  ewz_fil <- ewz %>%
+    dplyr::select(date, EWZ.Close) %>% 
+    dplyr::rename(Close = "EWZ.Close") %>% 
+    dplyr::filter(date >= "2021-01-01")
+  
+  # removendo NA
+  ewz_fil <- na.omit(ewz_fil)
+  
+  ewz_fil_var <- ewz_fil %>%
+  #  filter(date >= "2021-01-01") %>%
+    as.data.frame() %>% 
+    mutate(dia = weekdays(date),
+           semana = epiweek(date)) %>% 
+    filter(dia %in% c("segunda-feira", "sexta-feira")) %>% 
+    mutate(var_semanal =  Close/lag(Close)-1) %>% 
+    filter(dia %in% c("sexta-feira")) %>% 
+    mutate(Color = ifelse(var_semanal < 0, "negativo","green"))
+  
+  
+
+  DataMaisRecente <- ewz_fil_var %>% 
+    slice(which.max(date)) %>% 
+    select(date)
+  
+  
+  
+  graph_ewz <- ggplot(ewz_fil_var, aes(x = semana,  y = var_semanal, fill = Color)) + 
+    geom_col() + 
+    geom_text(aes(label = paste0(format(round(var_semanal*100,2), big.mark = ".", decimal.mark = ","),"%"),
+                  vjust = ifelse(var_semanal >= 0, -0.5, 1.5)),size = 3,
+              color = 'black',fontface='bold') +
+   scale_fill_manual(values = c("#27ae60","#c0392b")) +
+    geom_hline(yintercept = 0) +
+    theme_minimal() +
+     scale_y_continuous(labels = scales::percent_format(big.mark = ".", decimal.mark = ","),
+                       breaks = seq(-1,1,0.05),
+                       limits = c(min(ewz_fil_var$var_semanal)-0.05,max(ewz_fil_var$var_semanal)+ 0.05)) + 
+     theme(legend.position = "none",
+          strip.text = element_text(face = "bold", color = "#2E2C2F", size = "11"),
+          plot.title = element_text(size=15, hjust = 0.5, face="bold"),
+          axis.title.x = element_text(face="bold", color="#000000",size = 9),
+          axis.title.y = element_text(face="bold", color="#000000",size = 9),
+          plot.subtitle = element_text(size=9, hjust = 0.5, face="bold"),
+          axis.text.y = element_text(face="bold", color="#000000",size = 9),
+          axis.text.x = element_text(face="bold", color="#000000",size = 9)) +
+    labs(title = paste("EWZ - Variação Semanal"),
+         y = "Variação",
+         x = "Semana",
+         subtitle = paste("Última atualização:", 
+                          format(DataMaisRecente, "%d/%m/%Y")),
+         caption = paste("Fonte: Yahoo Finance! | Elaboração: BP Investimentos")) +
+    scale_x_continuous(breaks = 1:52, expand = c(0,0.5)) +
+    theme_xaringan(text_font_size = 10)
+  
+  
+
+  
+  return(graph_ewz)
+  
+  
+}
+
+
+##########################################################################################
+############## Variação semanal ações ----------------------------------------------------
+##########################################################################################
+
+
+#################################################################
+##### Função para capturar dados de setores ---------------------
+#################################################################
+
+indicadores_acao <- function(page) {
+  
+  
+  tabela <- table_scrap(paste0("https://www.ivalor.com.br/empresas/listagem?p=",page))
+  
+  
+  return(tabela)
+  
+}
+
+paginas <- c(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27)
+
+# aplicando loop para obter os indicadores das ações armazenados em um só dataframe
+indicadores_setores <- map_df(paginas, indicadores_acao)
+
+indicadores_setores_v2 <- indicadores_setores %>% 
+  mutate(Ações = strsplit(as.character(Ações), " ")) %>% 
+  unnest(Ações)
+
+indicadores_setores_v2$Ações <- str_trim(indicadores_setores_v2$Ações)
+
+indicadores_setores_v2 <- indicadores_setores_v2 %>% filter(Ações != "")
+
+indicadores_setores_v2 <- indicadores_setores_v2 %>% dplyr::mutate(acoes_sa = paste0(Ações, ".SA"))
+
+
+######################################################################################
+############# Buscando ações ---------------------------------------------------------
+######################################################################################
+
+# acoes_setores <- tq_get(indicadores_setores_v2$acoes_sa,
+#                         from = dt_inicio_semana,
+#                         to = dt_fim_semana,
+#                         get = "stock.prices")
+# 
+# 
+# # Salvando em csv ------------------------
+# write.csv2(acoes_setores, "acoes_setores.csv", row.names = F)
+
+
+# Carregando csv -----------------------
+acoes_setores <- read.csv2("acoes_setores.csv")
+
+acoes_setores$date <- ymd(acoes_setores$date)
+
+# Unindo com banco de setores --------------------------------
+acoes_setores_v2 <- acoes_setores %>% left_join(indicadores_setores_v2, by = c("symbol" = "acoes_sa"))
+
+# Vetor de tickets repetidos de ações ------------------------------
+tickets_repetidos <- c("BIDI4.SA", "BIDI3.SA", "SAPR4.SA", "ELET6.SA")
+
+# Removendo ações com pouco volume; Removendo ações com tickets repetidos; Filtrando seg e sex; 
+# Criando a variação semanal; Criando nova coluna com o nome da ação; selecionando colunas de interesse
+acoes_setores_v3 <- acoes_setores_v2 %>%
+  mutate(dia = weekdays(date)) %>% 
+  filter(volume >= 1000000) %>% 
+  filter(!symbol %in% tickets_repetidos) %>% 
+  filter(dia %in% c("segunda-feira", "quinta-feira")) %>% 
+  group_by(symbol) %>% 
+  mutate(var_semanal =  close/lag(close)-1) %>% 
+  filter(dia %in% c("quinta-feira")) %>% 
+  mutate(Color = ifelse(var_semanal < 0, "negativo","green")) %>% 
+  filter(date == max(date)) %>% 
+  dplyr::mutate(nome_acao_setor = paste0(Empresa, " (",Ações, ")")) %>% 
+  select(nome_acao_setor, date, var_semanal, dia, Color, Setor)
+
+
+# 5 maiores altas da semana em cada grupo ----------------------
+acoes_setores_v3_maiores <- acoes_setores_v3 %>% 
+  arrange(desc(var_semanal)) %>% 
+  group_by(Setor) %>%
+  slice(1:5)
+
+
+# 5 menores altas da semana em cada grupo ----------------------
+acoes_setores_v3_menores <- acoes_setores_v3 %>% 
+  arrange(var_semanal) %>% 
+  group_by(Setor) %>%
+  slice(1:5)
+
+
+# Unindo bancos ---------------------------------
+acoes_setores_complete <- rbind(acoes_setores_v3_maiores, acoes_setores_v3_menores)
+
+
+# Selecionando setores de interesse ------------------------------------
+acoes_setores_complete <- acoes_setores_complete %>% filter(Setor %in% c("Bens Industriais", "Consumo Cíclico",
+                                                                          "Consumo não Cíclico", "Financeiro",
+                                                                          "Materiais Básicos", "Petróleo. Gás e Biocombustíveis",
+                                                                           "Saúde", "Utilidade Pública"))
+
+
+# Transformando em dataframe --------------------------------
+acoes_setores_complete <- acoes_setores_complete %>% as.data.frame()
+
+
+# Gráfico 1  -----------------------------------------
+
+acoes_setores_complete_pt1 <- acoes_setores_complete %>%
+                              filter(Setor %in% c("Bens Industriais", "Consumo Cíclico",
+                                                   "Consumo não Cíclico", "Financeiro"))
+
+
+# Gráfico 2  -----------------------------------------
+
+acoes_setores_complete_pt2 <- acoes_setores_complete %>%
+  filter(Setor %in% c("Materiais Básicos", "Petróleo. Gás e Biocombustíveis",
+                      "Saúde", "Utilidade Pública"))
+
+
+##########################################################################################
+############ Retorno Índices -------------------------------------------------------------
+##########################################################################################
+
+
+
+
+#################################################################
+##### Função dos retornos e volatilidade por setor --------------
+#################################################################
+
+
+indexes <- c("^BVSP", "^GSPC", "^IXIC", "^FTSE", "^GDAXI", "^FCHI",
+             "^STOXX50E", "^N225", "000001.SS","^KS11")
+
+
+  cotacao_do_setor <- quantmod::getSymbols(indexes, # vetor com os dados
+                                 src = "yahoo", # fonte
+                                 from="2021-01-01", # data inicial
+                                 #  to="2021-04-02", # data final
+                                 periodicity="daily", # cotação diária
+                                 auto.assign = T,
+                                 warnings = F)
+  
+  china <- `000001.SS`
+  
+  ###################### Calculando o Retorno ######################
+  
+  calc_ret_index <- function(index) {
+  
+  # calculando o retorno 
+    dataset_test <- PerformanceAnalytics::Return.calculate(index, method = "discrete")
+  
+  # transformando NA em zero
+    dataset_test[1,] = 0 
+  
+  # removendo NA
+    dataset_test <- na.omit(dataset_test)
+    
+    dataset_test <- dataset_test[,4]
+  
+  # pesos 
+    dataset_test <- PerformanceAnalytics::Return.portfolio(dataset_test)
+  
+  # transformando em dataframe
+    dataset_test <- data.frame(date=index(dataset_test), coredata(dataset_test))
+  
+  # criando coluna com nome da carteira e mudando nome do retorno // calculando retorno acumulado //  retorno começando em zero
+    teste <- dataset_test %>%
+    dplyr::rename(retorno_diario = "portfolio.returns") %>%
+    dplyr::mutate(cr = cumprod(1 + retorno_diario)) %>%
+    dplyr::mutate(ret_acum = (cr - 1)) %>% 
+    dplyr::select(date, ret_acum)
+  
+  return(teste)
+  
+  }
+  
+  FTSE_ret <- as.data.frame(calc_ret_index(FTSE))  
+  BVSP_ret <- as.data.frame(calc_ret_index(BVSP))  
+  GSPC_ret <- as.data.frame(calc_ret_index(GSPC))  
+  GDAXI_ret <- as.data.frame(calc_ret_index(GDAXI))  
+  IXIC_ret <- as.data.frame(calc_ret_index(IXIC))  
+  FCHI_ret <- as.data.frame(calc_ret_index(FCHI))  
+  STOXX50E_ret <- as.data.frame(calc_ret_index(STOXX50E))  
+  N225_ret <- as.data.frame(calc_ret_index(N225))  
+  china_ret <- as.data.frame(calc_ret_index(china)) 
+  KS11_ret <- as.data.frame(calc_ret_index(KS11))  
+  
+  
+  FTSE_ret <- FTSE_ret %>% dplyr::mutate(indice = "FTSE 100 (Inglaterra)")
+  BVSP_ret <- BVSP_ret %>% dplyr::mutate(indice = "Ibovespa (Brasil)")
+  IXIC_ret <- IXIC_ret %>% dplyr::mutate(indice = "Nasdaq (EUA)")
+  GSPC_ret <- GSPC_ret %>% dplyr::mutate(indice = "S&P 500 (EUA)")
+  GDAXI_ret <- GDAXI_ret %>% dplyr::mutate(indice = "DAX (Alemanha)")
+  FCHI_ret <- FCHI_ret %>% dplyr::mutate(indice = "CAC 40 (França)")
+  STOXX50E_ret <- STOXX50E_ret %>% dplyr::mutate(indice = "Euro Stoxx 50 (Zona do Euro)")
+  N225_ret <- N225_ret %>% dplyr::mutate(indice = "Nikkei 225 (Japão)")
+  china_ret <- china_ret %>% dplyr::mutate(indice = "SSE Index (China)")
+  KS11_ret <- KS11_ret %>% dplyr::mutate(indice = "KOSPI Index (Coreia do Sul)")
+  
+  
+  dataset_indices <- rbind(FTSE_ret,IXIC_ret, BVSP_ret, GSPC_ret, GDAXI_ret, FCHI_ret, STOXX50E_ret, N225_ret, china_ret, KS11_ret)
+
+
+  
+##############################################################
+##### Titulos de 10 anos USA --------------------------------
+##############################################################
+
+# Obtain Treasury yield data
+t10yr <- getSymbols(Symbols = "DGS10", src = "FRED", auto.assign = FALSE)
+
+
+# coluna com data
+t10yr_df <- data.frame(date=index(t10yr), coredata(t10yr))
+
+# filtrando a partir de 2020
+t10yr_df_F <- t10yr_df %>% dplyr::filter(date >= "2020-01-03")
+
+# removendo NA
+t10yr_df_F <- na.omit(t10yr_df_F)
+
+
+
+##############################################################
+##### Titulos de 30 anos USA ---------------------------------
+##############################################################
+
+# Obtain Treasury yield data
+t30yr <- getSymbols(Symbols = "DGS30", src = "FRED", auto.assign = FALSE)
+
+# coluna com data
+t30yr_df <- data.frame(date=index(t30yr), coredata(t30yr))
+
+# filtrando a partir de 2020
+t30yr_df_F <- t30yr_df %>% dplyr::filter(date >= "2020-01-01")
+
+# removendo NA
+t30yr_df_F <- na.omit(t30yr_df_F)
+
+
+
+##############################################################
+##### Titulos de 5 anos USA ---------------------------------
+##############################################################
+
+# Obtain Treasury yield data
+t05yr <- getSymbols(Symbols = "DGS5", src = "FRED", auto.assign = FALSE)
+
+# coluna com data
+t05yr_df <- data.frame(date=index(t05yr), coredata(t05yr))
+
+# filtrando a partir de 2020
+t05yr_df_F <- t05yr_df %>% dplyr::filter(date >= "2020-01-01")
+
+# removendo NA
+t05yr_df_F <- na.omit(t05yr_df_F)
+
+
+##################################################################
+############### Gráfico com todos os titulos ---------------------
+##################################################################
+
+# juntando todos os bounds
+all_bounds <- list(t10yr_df_F, t30yr_df_F, t05yr_df_F) %>%
+               purrr::reduce(full_join, by = "date")
+
+# renomeando as colunas
+all_bounds <- all_bounds %>% dplyr::rename(`30 anos` = "DGS30",
+                                    `10 anos` = "DGS10",
+                                    `5 anos` = "DGS5")
+
+# transformando dataset em long
+all_bounds_gather <- all_bounds %>% gather(titulo_ano, rendimento, -date)
+
+# observando se tem NA
+which(is.na(all_bounds_gather$rendimento), arr.ind=TRUE)
+
+# definindo a ordem da legenda
+all_bounds_gather$titulo_ano <- factor(all_bounds_gather$titulo_ano,
+                                       levels = c("5 anos",
+                                                  "10 anos",
+                                                  "30 anos"))
+
+
+
+
+################################################################################
+#################### Commodities --------------------------------------------------
+################################################################################
+
+
+# usando a versão e o enviroment desejado do Anaconda ----------------------
+#use_python("C:\\Users\\pc\\anaconda3\\python.exe", required = TRUE)
+
+
+# conferindo a versão e o enviroment ----------------------------
+#repl_python()
+
+
+#reticulate::py_install("investpy", pip = TRUE, envname = "r-reticulate")
+
+
+
+# pacotes Python ------------------------------------
+pd <- import("pandas")
+# matplotlib <- import("matplotlib")
+# random <- import("random")
+# statsmodels <- import("statsmodels")
+# np <- import("numpy")
+# math <- import("math")
+wb <- import("pandas_datareader")
+investpy <- import("investpy")
+
+
+
+############ Petróleo -------------------------------------
+
+# Crude Oil Futures, Continuous Contract #1 (CL1) (Front Month)
+
+
+search_result_brent <- investpy$search_quotes(text = "Brent Oil", n_results = as.integer(1))
+
+
+brent_futuro <- search_result_brent$retrieve_historical_data(from_date = '01/01/2020', to_date = dt_commoditie_final_semana)
+
+
+# coluna com data
+brent_futuro$data <- row.names(brent_futuro)
+brent_futuro$data <- ymd(brent_futuro$data)
+
+
+brent_graph <- ggplot(brent_futuro, aes(x = data, y = Close)) +
+  geom_line(size = 1.1, colour = "#ffa600") +
+  labs(y="Preço do contrato futuro (em Dólar)", x="", fill="",
+       title = "Petróleo Brent Futuros - Dez 21 (BZ1)",
+       caption = "Fonte: Investing.com | Elaboração: BP Investimentos",
+       colour = "") +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        strip.text = element_text(face = "bold", size = "11"),
+        plot.title = element_text(size=17, hjust = 0.5, face="bold"),
+        plot.subtitle = element_text(color = "dodgerblue4", hjust = 0.5, face="bold", size = 12),
+        axis.text.y = element_text(face="bold", color="#000000",size=10),
+        axis.text.x = element_text(face="bold", color="#000000",size=10),
+        axis.title.y = element_text(size = 10)) +
+  scale_y_continuous(labels = scales::dollar_format(prefix = "US$",
+                                                    big.mark = ".",
+                                                    decimal.mark = ","),
+                     breaks = c(15,25,35,45,55,65,75,85),
+                     limits = c(15,85)) +
+  scale_x_date(date_labels = "%b\n%Y", breaks = "3 month") +
+  theme_xaringan(text_font_size = 10)
+
+
+############## Ferro ---------------------------------------
+
+# https://br.investing.com/commodities/iron-ore-62-cfr-futures-streaming-chart
+
+search_result <- investpy$search_quotes(text = "Iron CFR Futures", n_results = as.integer(1))
+
+
+ferro_futuros <- search_result$retrieve_historical_data(from_date = '01/01/2020', to_date = dt_commoditie_final_semana)
+
+
+# coluna com data
+ferro_futuros$data <- row.names(ferro_futuros)
+ferro_futuros$data <- ymd(ferro_futuros$data)
+
+
+ferro_graph <- ggplot(ferro_futuros, aes(x = data, y = Close)) +
+  geom_line(size = 1.1, colour = "#ffa600") +
+  labs(y="Preço do contrato futuro (em Dólar)", x="", fill="",
+       title = "Minério de ferro 62% Futuros",
+       caption = "Fonte: Investing.com | Elaboração: BP Investimentos",
+       colour = "") +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        strip.text = element_text(face = "bold", size = "11"),
+        plot.title = element_text(size=17, hjust = 0.5, face="bold"),
+        plot.subtitle = element_text(color = "dodgerblue4", hjust = 0.5, face="bold", size = 12),
+        axis.text.y = element_text(face="bold", color="#000000",size=10),
+        axis.text.x = element_text(face="bold", color="#000000",size=10),
+        axis.title.y = element_text(size = 10)) +
+  scale_y_continuous(labels = scales::dollar_format(prefix = "US$",
+                                                    big.mark = ".",
+                                                    decimal.mark = ","),
+                     breaks = c(70,110,150,190,230),
+                     limits = c(70, 230)) +
+  scale_x_date(date_labels = "%b\n%Y", breaks = "3 month") +
+  theme_xaringan(text_font_size = 10)
+
+
+
+############ Soja -------------------------------------
+
+
+search_result_soja <- investpy$search_quotes(text = "us-soybeans", n_results = as.integer(1))
+
+
+soja_futuro <- search_result_soja$retrieve_historical_data(from_date = '01/01/2020', to_date = dt_commoditie_final_semana)
+
+
+# coluna com data
+soja_futuro$data <- row.names(soja_futuro)
+soja_futuro$data <- ymd(soja_futuro$data)
+
+
+soja_graph <- ggplot(soja_futuro, aes(x = data, y = Close)) +
+  geom_line(size = 1.1, colour = "#ffa600") +
+  labs(y="Preço do contrato futuro (em Dólar)", x="", fill="",
+       title = "Soja NY Futuros - Nov 21 (ZSX1)",
+       caption = "Fonte: Investing.com | Elaboração: BP Investimentos",
+       colour = "") +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        strip.text = element_text(face = "bold", size = "11"),
+        plot.title = element_text(size=17, hjust = 0.5, face="bold"),
+        plot.subtitle = element_text(color = "dodgerblue4", hjust = 0.5, face="bold", size = 12),
+        axis.text.y = element_text(face="bold", color="#000000",size=10),
+        axis.text.x = element_text(face="bold", color="#000000",size=10),
+        axis.title.y = element_text(size = 10)) +
+  scale_y_continuous(labels = scales::dollar_format(prefix = "US$",
+                                                    big.mark = ".",
+                                                    decimal.mark = ","),
+                     breaks = seq(800,1800,200),
+                     limits = c(800,1800)) +
+  scale_x_date(date_labels = "%b\n%Y", breaks = "3 month") +
+  theme_xaringan(text_font_size = 10)
+
+
+############ Milho -------------------------------------
+
+
+search_result_milho <- investpy$search_quotes(text = "us-corn", n_results = as.integer(1))
+
+
+milho_futuro <- search_result_milho$retrieve_historical_data(from_date = '01/01/2020', to_date = dt_commoditie_final_semana)
+
+
+# coluna com data
+milho_futuro$data <- row.names(milho_futuro)
+milho_futuro$data <- ymd(milho_futuro$data)
+
+
+milho_graph <- ggplot(milho_futuro, aes(x = data, y = Close)) +
+  geom_line(size = 1.1, colour = "#ffa600") +
+  labs(y="Preço do contrato futuro (em Dólar)", x="", fill="",
+       title = "Milho NY Futuros - Dez 21 (ZCZ1)",
+       caption = "Fonte: Investing.com | Elaboração: BP Investimentos",
+       colour = "") +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        strip.text = element_text(face = "bold", size = "11"),
+        plot.title = element_text(size=17, hjust = 0.5, face="bold"),
+        plot.subtitle = element_text(color = "dodgerblue4", hjust = 0.5, face="bold", size = 12),
+        axis.text.y = element_text(face="bold", color="#000000",size=10),
+        axis.text.x = element_text(face="bold", color="#000000",size=10),
+        axis.title.y = element_text(size = 10)) +
+  scale_y_continuous(labels = scales::dollar_format(prefix = "US$",
+                                                    big.mark = ".",
+                                                    decimal.mark = ","),
+                     breaks = seq(250,800,100),
+                     limits = c(250,800)) +
+  scale_x_date(date_labels = "%b\n%Y", breaks = "3 month") +
+  theme_xaringan(text_font_size = 10)
+
+
+############ Algodão -------------------------------------
+
+
+search_result_algodao <- investpy$search_quotes(text = "us-cotton-no.2", n_results = as.integer(1))
+
+
+algodao_futuros <- search_result_algodao$retrieve_historical_data(from_date = '01/01/2020', to_date = dt_commoditie_final_semana)
+
+
+# coluna com data
+algodao_futuros$data <- row.names(algodao_futuros)
+algodao_futuros$data <- ymd(algodao_futuros$data)
+
+
+algodao_graph <- ggplot(algodao_futuros, aes(x = data, y = Close)) +
+  geom_line(size = 1.1, colour = "#ffa600") +
+  labs(y="Preço do contrato futuro (em Dólar)", x="", fill="",
+       title = "Algodão NY nº2 Futuros - Dez 21 (CTZ1)",
+       caption = "Fonte: Investing.com | Elaboração: BP Investimentos",
+       colour = "") +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        strip.text = element_text(face = "bold", size = "11"),
+        plot.title = element_text(size=17, hjust = 0.5, face="bold"),
+        plot.subtitle = element_text(color = "dodgerblue4", hjust = 0.5, face="bold", size = 12),
+        axis.text.y = element_text(face="bold", color="#000000",size=10),
+        axis.text.x = element_text(face="bold", color="#000000",size=10),
+        axis.title.y = element_text(size = 10)) +
+  scale_y_continuous(labels = scales::dollar_format(prefix = "US$",
+                                                    big.mark = ".",
+                                                    decimal.mark = ","),
+                     breaks = seq(40,120,20),
+                     limits = c(40,120)) +
+  scale_x_date(date_labels = "%b\n%Y", breaks = "3 month") +
+  theme_xaringan(text_font_size = 10)
+
+
+
+############ Boi Gordo -------------------------------------
+
+
+search_result_boi_gordo <- investpy$search_quotes(text = "live-cattle", countries = as.list("brazil"), n_results = as.integer(1))
+
+
+boi_gordo_futuros <- search_result_boi_gordo$retrieve_historical_data(from_date = '01/01/2020', to_date = dt_commoditie_final_semana)
+
+
+# coluna com data
+boi_gordo_futuros$data <- row.names(boi_gordo_futuros)
+boi_gordo_futuros$data <- ymd(boi_gordo_futuros$data)
+
+
+boi_graph <- ggplot(boi_gordo_futuros, aes(x = data, y = Close)) +
+  geom_line(size = 1.1, colour = "#ffa600") +
+  labs(y="Preço do contrato futuro (em Real)", x="", fill="",
+       title = "Boi Gordo Futuros - Out 21 (BGIc1)",
+       caption = "Fonte: Investing.com | Elaboração: BP Investimentos",
+       colour = "") +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        strip.text = element_text(face = "bold", size = "11"),
+        plot.title = element_text(size=17, hjust = 0.5, face="bold"),
+        plot.subtitle = element_text(color = "dodgerblue4", hjust = 0.5, face="bold", size = 12),
+        axis.text.y = element_text(face="bold", color="#000000",size=10),
+        axis.text.x = element_text(face="bold", color="#000000",size=10),
+        axis.title.y = element_text(size = 10)) +
+  scale_y_continuous(labels = scales::dollar_format(prefix = "R$",
+                                                    big.mark = ".",
+                                                    decimal.mark = ","),
+                     breaks = seq(180,330,30),
+                     limits = c(180,330)) +
+  scale_x_date(date_labels = "%b\n%Y", breaks = "3 month") +
+  theme_xaringan(text_font_size = 10)
+
+
+
+##############################################################################################
+########### RENDA FIXA -----------------------------------------------------------------------
+##############################################################################################
+
+
+# fazendo download das NTN-B's
+download.TD.data('NTN-B')
+ntnb <- read.TD.files(dl.folder = 'TD Files',
+                      asset.codes = 'NTN-B')
+
+
+ntnb <- ntnb %>% filter(asset.code !="NTN-B 150535")
+
+
+
+download.TD.data('NTN-F')
+ntnf <- read.TD.files(dl.folder = 'TD Files',
+                      asset.codes = 'NTN-F')
+
+
+# filtrando a data de referência a partir de 2020
+ntnb <- ntnb %>% filter(ref.date >= '2021-01-01')
+ntnf <- ntnf %>% filter(ref.date >= '2021-01-01')
+
+
+
+# gráfico das NTN-B's
+
+ntnb_graph <- ggplot(ntnb, aes(x=ref.date, y=yield.bid*100, colour=asset.code))+
+geom_line(size = 1.1)+
+scale_x_date(breaks = date_breaks("1 month"),
+               labels = date_format("%b\n%Y"))+
+theme(axis.text.x=element_text(angle=45, hjust=1))+
+      labs(x='', y='Rendimento anual (% a.a.)', colour = "Código",
+      title='Tesouro IPCA+',
+      subtitle = "Data de Referência: 01/01/2021",
+      caption='Fonte: Tesouro Direto | Elaboração: BP Investimentos') +
+theme_minimal() +
+  theme(legend.position = "bottom",
+        legend.title = element_text(size = 10),
+        legend.text = element_text(size = 8),
+        strip.text = element_text(face = "bold", size = "11"),
+        plot.title = element_text(size=17, hjust = 0.5, face="bold"),
+        plot.subtitle = element_text(hjust = 0.5, face="bold", size = 12),
+        axis.text.y = element_text(face="bold", color="#000000",size=10),
+        axis.text.x = element_text(face="bold", color="#000000",size=10),
+        axis.title.y = element_text(size = 10)) + 
+scale_y_continuous(labels = scales::number_format(decimal.mark = ",", big.mark = "."),
+                     breaks = seq(1,6,0.5),
+                     limits = c(1,6)) +
+scale_colour_manual(values = c("#16a085","#341f97","#ff9ff3",
+                               "#2980b9","#c0392b",
+                               "#8e44ad","#f9ca24","#2c3e50",
+                               "#95a5a6"),
+                    drop = FALSE,
+                    guide = guide_legend(
+                      direction = "horizontal",
+                      keyheight = unit(2, units = "mm"), 
+                      keywidth = unit(25/length(labels), units = "mm"),
+                      title.position = 'top',
+                      title.hjust = 0.5,
+                      label.hjust = 0.5,
+                      nrow = 1,
+                      byrow = TRUE,
+                      reverse = FALSE,
+                      label.position = "bottom")) +
+  theme_xaringan(text_font_size = 10)
+
+
+
+# gráfico das NTN-F's
+ ntnf_graph <- ggplot(ntnf, aes(x=ref.date, y=yield.bid*100, colour=asset.code))+
+    geom_line(size = 1.2)+
+   # geom_hline(yintercept=0, colour='black')+
+    scale_x_date(breaks = date_breaks("1 month"),
+                 labels = date_format("%b\n%Y"))+
+    labs(x='', y='Rendimento anual (% a.a.)', colour = "Código",
+         title='Tesouro Prefixado com Juros Semestrais',
+         subtitle = "Data de Referência: 01/01/2021",
+      caption='Fonte: Tesouro Direto | Elaboração: BP Investimentos') +
+   theme_minimal() +
+  theme(legend.position = "bottom",
+        legend.title = element_text(size = 10),
+        legend.text = element_text(size = 8),
+        strip.text = element_text(face = "bold", size = "11"),
+        plot.title = element_text(size=17, hjust = 0.5, face="bold"),
+        plot.subtitle = element_text(hjust = 0.5, face="bold", size = 12),
+        axis.text.y = element_text(face="bold", color="#000000",size=10),
+        axis.text.x = element_text(face="bold", color="#000000",size=10),
+        axis.title.y = element_text(size = 10)) + 
+scale_y_continuous(labels = scales::number_format(decimal.mark = ",", big.mark = "."),
+                   breaks = seq(4,12,1),
+                   limits = c(4,12)) +
+scale_colour_manual(values = c("#173F5F", "#20639B", "#3CAEA3", "#F6D55C", "#ED553B"),
+                    drop = FALSE,
+                    guide = guide_legend(
+                      direction = "horizontal",
+                      keyheight = unit(2, units = "mm"), 
+                      keywidth = unit(35/length(labels), units = "mm"),
+                      title.position = 'top',
+                      title.hjust = 0.5,
+                      label.hjust = 0.5,
+                      nrow = 1,
+                      byrow = TRUE,
+                      reverse = FALSE,
+                      label.position = "bottom")) +
+  theme_xaringan(text_font_size = 10)
+ 
+
+ 
+########### Prefixado -------------------------------------------------
+ 
+
+# Data de refrência -----------------
+#dt_prefix = as.Date("2021-10-15")
+
+
+####################################################################
+### Taxa DI --------------------------------------------------------
+####################################################################
+
+
+#cdi <- get_series(c(CDI = 4389), start_date = "2010-01-02")
+
+# cdi[2967,1] <- as.Date("2021-10-22")
+# cdi[2967,2] <- as.numeric(6.15)
+
+####################################################################
+### Captando e tratando dados --------------------------------------
+####################################################################
+
+### Pesquisa por pregão B3
+
+# http://www.b3.com.br/pt_br/market-data-e-indices/servicos-de-dados/market-data/historico/boletins-diarios/pesquisa-por-pregao/pesquisa-por-pregao/>
+
+### Leitura do arquivo Pricing Report BVBG.086
+
+# <http://www.b3.com.br/data/files/99/04/3A/E5/38B80710E7BCA507DC0D8AA8/Catalogo%20de%20Taxonomia%20UP2DATA%20-%20Portugues.pdf>
+
+
+# Link para o arquivo ----------------------
+# url = format(dt_prefix, "http://www.b3.com.br/pesquisapregao/download?filelist=PR%y%m%d.zip")
+# 
+# download.file(url, destfile = "pesquisa-pregao.zip", method = "auto")
+# 
+# 
+# # Arquivo vem zipado 2x. Primeiro zip ------------------------
+# filename_0 <- "pesquisa-pregao.zip"
+# 
+# # Segundo zip -----------------------------
+# filename = format(dt_prefix, "PR%y%m%d.zip")
+# 
+# # Descompactando arquivos ------------------
+# files = unzip(filename_0)
+# files = unzip(files)
+# 
+# fname = max(files)
+# 
+# 
+# negDoc = xmlInternalTreeParse(fname)
+# negs = getNodeSet(negDoc, "//d:PricRpt", c(d="urn:bvmf.217.01.xsd"))
+# negs[[1]]
+# 
+# 
+# # Função para filtrar dados DI 1 ---------------------
+# filtrando_contratos_DI1 <- function(node) {
+#   ticker <- xmlValue(node[['SctyId']][['TckrSymb']])
+#   if (str_detect(ticker, "^DI1")) {
+#     extraindo_dados_DI1(ticker, node)
+#   } else {
+#     NULL
+#   }
+# }
+# 
+# 
+# # Função para extrair dados DI 1 ---------------------------
+# extraindo_dados_DI1 <- function(ticker, node) {
+#   refdate <- xmlValue(node[['TradDt']][['Dt']])
+#   attrib <- node[['FinInstrmAttrbts']]
+#   
+#   data.frame(
+#     refdate = refdate,
+#     ticker = ticker,
+#     contratos_em_aberto = as.numeric(xmlValue(attrib[['OpnIntrst']])),
+#     n_negocios = as.numeric(xmlValue(attrib[['RglrTxsQty']])),
+#     contratos_negociados = as.numeric(xmlValue(attrib[['FinInstrmQty']])),
+#     volume_reais = as.numeric(xmlValue(attrib[['NtlFinVol']])),
+#     valor_fechamento = as.numeric(xmlValue(attrib[['LastPric']])),
+#     valor_ajuste_taxa = as.numeric(xmlValue(attrib[['AdjstdQtTax']])),
+#     valor_ajuste = as.numeric(xmlValue(attrib[['AdjstdQt']])),
+#     preco_abertura = as.numeric(xmlValue(attrib[['FrstPric']])),
+#     preco_minimo = as.numeric(xmlValue(attrib[['MinPric']])),
+#     preco_maximo = as.numeric(xmlValue(attrib[['MaxPric']])),
+#     preco_medio = as.numeric(xmlValue(attrib[['TradAvrgPric']])),
+#     stringsAsFactors = FALSE)
+# }
+# 
+# 
+# # Criando dataframe com dados XML ---------------------------
+# #debugonce(extraindo_dados_DI1)
+# negs_df <- negs %>% map_df(filtrando_contratos_DI1)
+# 
+# 
+# # Organizando dataframe ------------------------
+# negs_df %>%
+#   arrange(desc(contratos_em_aberto))
+# 
+# 
+# ### Gerando as datas de vencimento
+# # Os códigos de vencimento seguem a convenção da B3
+# #Os contratos futuros de DI1 tem vencimento no primeiro dia útil do mês
+# 
+# contract_to_maturity <- function(x) {
+#   maturity_code <- str_sub(x, -3)
+#   
+#   year <- as.integer( str_extract(maturity_code, "\\d\\d$") ) + 2000
+#   
+#   m_ <- c(F = 1, G = 2, H = 3, J = 4, K = 5, M = 6, N = 7, Q = 8, U = 9, V = 10, X = 11, Z = 12)
+#   month_code <- str_extract(maturity_code, "^.")
+#   month <- m_[month_code] %>%
+#     str_pad(2, pad = "0")
+#   
+#   glue("{year}-{month}-01") %>% as.Date()
+#   
+# }
+# 
+# 
+# # Criando dataframe com dados XML ---------------------------
+# 
+# #debugonce(contract_to_maturity)
+# 
+# 
+# negs_df <- negs_df %>%
+#   mutate(vencimento = contract_to_maturity(ticker))
+# 
+# 
+# refdate <- negs_df$refdate[1]
+# 
+# 
+# 
+# ##### Construindo a curva de taxas de juros prefixados ---------------
+# 
+# # incluir o primeiro vértice a curva de juros
+# v_cdi <- cdi %>%
+#   filter(date == refdate) %>%
+#   mutate(
+#     DataRef = refdate,
+#     Vencimento = offset(DataRef, 1, "Brazil/ANBIMA"),
+#     DU = 1,
+#     Taxa = CDI) %>%
+#   select(DataRef, Vencimento, DU, Taxa)
+# 
+# #v_cdi
+# 
+# v_di1 <- negs_df %>%
+#   mutate(
+#     VencimentoAj = following(vencimento, "Brazil/ANBIMA"),
+#     DU = bizdays(refdate, VencimentoAj, "Brazil/ANBIMA")
+#   ) %>%
+#   rename(
+#     DataRef = refdate,
+#     Vencimento = VencimentoAj,
+#     Taxa = valor_ajuste_taxa) %>%
+#   select(DataRef, Vencimento, DU, Taxa)
+# 
+# #v_di1
+# 
+# curva_pre <- rbind(v_cdi, v_di1) %>% arrange(DU)
+# 
+# 
+# write.csv2(curva_pre, paste0("curva-pre_", dt_prefix,".csv"), row.names = F)
+
+
+### gráfico -----
+
+
+curva_seg <- read.csv2("curva-pre_2021-10-15.csv")
+
+curva_sex <- read.csv2("curva-pre_2021-10-22.csv")
+
+
+
+curvas <- rbind(curva_seg, curva_sex)
+
+
+curvas$DataRef <- ymd(curvas$DataRef)
+curvas$Vencimento <- ymd(curvas$Vencimento)
+
+
+curvas$dia_semana <- weekdays(curvas$DataRef)
+
+
+curvas$dia_semana <- paste0(format(curvas$DataRef, "%d/%m/%Y")," (", curvas$dia_semana, ")")
+
+
+#curva_pre
+
+plot_curvas_pre <- ggplot(curvas, aes(x = Vencimento, y = Taxa, colour = dia_semana, group = dia_semana)) +
+  geom_line(size = 1.2) +
+  theme_minimal() +
+  labs(title = "Curvas de Juros (ETTJ Prefixado)",
+       subtitle = "ETTJ = Estrutura a Termo da Taxa de Juros",
+       colour = "",
+       caption = "Fonte: B3 | Elaboração: BP Investimentos") +
+    scale_x_date(date_labels = "%Y", breaks = "1 year", expand = c(0,100)) +
+  theme(legend.position = "top",
+          plot.caption = element_text(size= 10),
+          legend.text = element_text(size = 11),
+          strip.text = element_text(face = "bold", color = "#2E2C2F", size = "11"),
+          plot.title = element_text(size=17, color = "black", hjust = 0.5, face="bold"),
+          plot.subtitle = element_text(face="italic", size = 8, hjust = 0.5),
+          axis.text.y = element_text(face="bold", color="#000000",size=10),
+          axis.text.x = element_text(face="bold", color="#000000",size=10),
+          axis.title.x = element_text(size = 10),
+          axis.title.y = element_text(size = 10)) +
+    scale_color_manual(values = c("#003f5c", "#bc5090"),
+                       drop = FALSE,
+                       guide = guide_legend(
+                         direction = "horizontal",
+                         keyheight = unit(2, units = "mm"), 
+                         keywidth = unit(60/length(labels), units = "mm"),
+                         title.position = 'top',
+                         title.hjust = 0.5,
+                         label.hjust = 0.5,
+                         nrow = 1,
+                         byrow = TRUE,
+                         reverse = FALSE,
+                         label.position = "top")) +
+  theme_xaringan(text_font_size = 10)
+ 
+
+################################################################################
+#################### Inflação --------------------------------------------------
+################################################################################
+
+ 
+inflacao <- '/t/1737/n1/all/v/2266/p/all/d/v2266%2013' %>%
+  get_sidra(api=.) %>%
+  mutate(date = parse_date(`Mês (Código)`, format="%Y%m")) %>%
+  rename(indice = Valor) %>%
+  mutate(inflacao_mensal = (indice/lag(indice,1)-1)*100,
+         inflacao_anual = (indice/lag(indice,12)-1)*100) %>%
+  select(date, indice, inflacao_mensal, inflacao_anual)
+ 
+ 
+######### Inflação mensal ########
+
+### condição para registrar negativos e positivos com cores diferentes ### 
+inflacao <- inflacao %>% mutate(Color = ifelse(inflacao_mensal < 0, "negativo","green"))
+
+ 
+inflacao_12 <- inflacao %>% filter(date >= "2021-01-01")
+
+
+### gráfico em barras ### 
+inf_mensal_graph <- ggplot(data=inflacao_12, aes(x = date, y = inflacao_mensal, fill = Color)) +
+  geom_bar(position = "dodge", stat = "identity") +
+  labs(y="% a.m.",
+       x="",
+       title = "Inflação mensal medida pelo IPCA",
+       caption = "Fonte: Índice de Preços ao Consumidor Amplo (IPCA) - IBGE | Elaboração: BP Investimentos") +
+  geom_hline(yintercept = 0) +
+  geom_text(aes(label = paste0(format(round(inflacao_mensal,2), big.mark = ".", decimal.mark = ","),"%"),
+                vjust = ifelse(inflacao_mensal >= 0, -0.5, 1.5)),size = 2,
+            color = 'black',fontface='bold') +
+  theme_minimal() +
+  theme(legend.position = "none",
+          strip.text = element_text(face = "bold", color = "#2E2C2F", size = "11"),
+          plot.title = element_text(size=11, hjust = 0.5, face="bold"),
+          axis.title.x = element_text(face="bold", color="#000000",size = 7),
+          axis.title.y = element_text(face="bold", color="#000000",size = 7),
+          plot.subtitle = element_text(size=9, hjust = 0.5, face="bold"),
+          axis.text.y = element_text(face="bold", color="#000000",size = 7),
+          axis.text.x = element_text(face="bold", color="#000000",size = 5)) +
+  scale_x_date(date_labels = "%b\n%Y", breaks = "1 month", expand = c(0,1)) +
+  scale_fill_manual(values = c("#27ae60","#c0392b")) +
+  scale_y_continuous(breaks = seq(0,max(inflacao_12$inflacao_mensal) + 0.2, 0.1),
+                     labels = scales::number_format(big.mark = ".", decimal.mark = ",", accuracy = 0.01),
+                     limits = c(0, max(inflacao_12$inflacao_mensal) + 0.2)) +
+  theme_xaringan(text_font_size = 7)
+
+
+
+########### Inflação em 12 meses #############
+
+
+ultimo_valor <- inflacao %>% # last trading day
+                slice(which.max(date))
+
+
+inf_12meses_graph <- ggplot(data = inflacao %>% filter(date > "2020-01-01"), aes(x = date, y = inflacao_anual)) +
+  geom_line(size = 1, colour = "#ffa600") +
+  labs(title = "Inflação acumulada em 12 meses",
+       caption = "Fonte: Índice de Preços ao Consumidor Amplo (IPCA) - IBGE | Elaboração: BP Investimentos",
+       x='',
+       y="% a.a.") +
+  theme_minimal() +
+  theme(legend.position = "none",
+          strip.text = element_text(face = "bold", color = "#2E2C2F", size = "11"),
+          plot.title = element_text(size=11, hjust = 0.5, face="bold"),
+          axis.title.x = element_text(face="bold", color="#000000",size = 7),
+          axis.title.y = element_text(face="bold", color="#000000",size = 7),
+          plot.subtitle = element_text(size=9, hjust = 0.5, face="bold"),
+          axis.text.y = element_text(face="bold", color="#000000",size = 7),
+          axis.text.x = element_text(face="bold", color="#000000",size = 5)) +
+  scale_y_continuous(labels = scales::number_format(big.mark = ".", decimal.mark = ",", accuracy = 0.01)) +
+  scale_x_date(date_labels = "%b\n%Y", breaks = "2 month", expand = c(0,1)) +
+  geom_label_repel(data = ultimo_valor,
+                   aes(label = paste0(round(inflacao_anual,2),"%")),
+                   color = 'black',
+                   fontface = "bold",
+                   fill = '#ffa600') +
+  theme_xaringan(text_font_size = 7)
+
+
+
+############# Contribuição por grupo ################
+
+
+# variação dos grupos ao longo do mês
+variacao <- '/t/7060/n1/all/v/63/p/all/c315/7170,7445,7486,7558,7625,7660,7712,7766,7786/d/v63%202' %>%
+  get_sidra(api=.) %>%
+  mutate(date = parse_date(`Mês (Código)`, format='%Y%m')) %>%
+  select(date, "Geral, grupo, subgrupo, item e subitem", Valor) %>%
+  pivot_wider(names_from = "Geral, grupo, subgrupo, item e subitem",
+              values_from = Valor)
+
+# peso de cada produto ao longo do mês
+peso <- '/t/7060/n1/all/v/66/p/all/c315/7170,7445,7486,7558,7625,7660,7712,7766,7786/d/v66%204' %>%
+  get_sidra(api=.) %>%
+  mutate(date = parse_date(`Mês (Código)`, format='%Y%m')) %>%
+  select(date, "Geral, grupo, subgrupo, item e subitem", Valor) %>%
+  pivot_wider(names_from = "Geral, grupo, subgrupo, item e subitem",
+              values_from = Valor)
+
+# calculando a contribuição de cada grupo
+contribuicao <- (variacao[,-1]*peso[,-1]/100) %>%
+  mutate(date = variacao$date) %>%
+  select(date, everything())
+
+
+### Inflação
+inflacao_grupo <- '/t/1737/n1/all/v/2266/p/all/d/v2266%2013' %>%
+  get_sidra(api=.) %>%
+  mutate(date = parse_date(`Mês (Código)`, format="%Y%m")) %>%
+  rename(indice = Valor) %>%
+  mutate(inflacao_mensal = (indice/lag(indice,1)-1)*100,
+         inflacao_anual = (indice/lag(indice,12)-1)*100) %>%
+  select(date, indice, inflacao_mensal, inflacao_anual)
+
+
+inflacao_grupo <- inflacao_grupo %>% filter("2021-01-01" <= date & date <= "2021-10-01")
+
+# criando coluna com apenas o mês/ano
+contribuicao$mes_ano <- format(contribuicao$date, "%Y%m")
+inflacao_grupo$mes_ano <- format(inflacao_grupo$date, "%Y%m")
+
+inflacao_grupo$date <- NULL
+inflacao_grupo$indice <- NULL
+
+# unindo contribuição com a inflação
+contribuicao <- inner_join(contribuicao, inflacao_grupo, by="mes_ano")
+
+# transformando dataset em 'long'
+contribuicao2 <- contribuicao %>% gather("setor","variação",-c(date,mes_ano,inflacao_mensal,inflacao_anual ))
+
+# renomenado coluna setor
+contribuicao2$setor <-  recode(contribuicao2$setor,
+                               `1.Alimentação e bebidas` = "Alimentação e bebidas",
+                               `2.Habitação` = "Habitação",
+                               `3.Artigos de residência` =  "Artigos de residência",
+                               `4.Vestuário` = "Vestuário",
+                               `5.Transportes` = "Transportes",
+                               `6.Saúde e cuidados pessoais` = "Saúde e cuidados pessoais",
+                               `7.Despesas pessoais` = "Despesas pessoais",
+                               `8.Educação` = "Educação",
+                               `9.Comunicação` = "Comunicação")
+
+
+
+
+# criando coluna com nome do mês
+contribuicao2$mes <- month(contribuicao2$date)
+
+# ajustando a ordem dos meses
+contribuicao2 <- contribuicao2 %>% mutate(mes = factor(case_when(mes == 1 ~ "Janeiro",
+                                                mes == 2 ~ "Fevereiro",
+                                                mes == 3 ~ "Março",
+                                                mes == 4 ~ "Abril",
+                                                mes == 5 ~ "Maio",
+                                                mes == 6 ~ "Junho",
+                                                mes == 7 ~ "Julho",
+                                                mes == 8 ~ "Agosto",
+                                                mes == 9 ~ "Setembro",
+                                                mes == 10 ~ "Outubro",
+                                                mes == 11 ~ "Novembro",
+                                                mes == 12 ~ "Dezembro"),
+                         levels = c("Janeiro","Fevereiro","Março","Abril","Maio","Junho",
+                                    "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro")))
+
+
+# condição para registrar negativos e positivos com cores diferentes
+contribuicao2 <- contribuicao2 %>% mutate(Color = ifelse(variação < 0, "negativo","green"))
+
+# ordenando setores
+contribuicao2$setor <-  factor(contribuicao2$setor, levels = c("Vestuário",
+                                                               "Transportes",
+                                                               "Saúde e cuidados pessoais",
+                                                               "Habitação",
+                                                               "Educação",
+                                                               "Despesas pessoais",
+                                                               "Comunicação",
+                                                               "Artigos de residência",
+                                                               "Alimentação e bebidas"))
+
+# gráfico de impacto mensal por grupo, separado por mês
+vertical_sep_ipca <- ggplot(contribuicao2, aes(x=variação,y=setor,fill=Color))+
+  geom_col() +
+  labs(x="", y="", subtitle = "Variação acumulada em 2021 (%): 7,65\nVariação acumulada em 12 meses (%): 10,25", fill="",
+       caption = "Fonte: Índice de Preços ao Consumidor Amplo (IPCA) - IBGE | Elaboração: BP Investimentos",
+       title = "Contribuição, em pontos percentuais, de cada grupo do IPCA na inflação mensal. 2021") +
+  geom_vline(xintercept = 0) +
+  # geom_text(aes(label= round(variação,4)), size = 1.6, position = position_dodge(width = 0.85),
+  #           hjust = ifelse(contribuicao2$variação >= 0,-0.1, 1.1), color = 'black',fontface='bold') +
+  facet_wrap(~mes, ncol = 4) +
+  geom_text(aes(x = variação + 0.08 * sign(variação), label= round(variação,4)), 
+            position = position_dodge(width = 0.9), 
+            size = 1.8, color = 'black',fontface='bold') +
+  theme_minimal() +
+  theme(plot.title = element_text(face="bold", size = 12),
+        plot.subtitle = element_text(face="italic", size = 8),
+        plot.caption = element_text(size = 8),
+        axis.title.x = element_text(size=9, colour = "black"),
+        axis.title.y = element_text(size=9,  colour = "black"),
+        axis.text.y = element_text(face="bold", color="#000000", 
+                                   size=6),
+        axis.text.x = element_text(face="bold", color="#000000", 
+                                   size=6),
+        legend.position = "none") +
+  scale_x_continuous(limits = c(min(contribuicao2$variação) - 0.1, max(contribuicao2$variação) + 0.1),
+                     breaks = seq(min(contribuicao2$variação) - 0.1, max(contribuicao2$variação) + 0.1, 0.2),
+                     labels = scales::number_format(big.mark = ".", decimal.mark = ",", accuracy = 0.1)) +
+  scale_fill_manual(values = c("#27ae60","#c0392b")) +
+  theme_xaringan(text_font_size = 10)
+
+
+# NA to "-" -------------------------------
+opts <- options(knitr.kable.NA = "-")
+
+
+
+```
+
+
+```{css, echo=F}
+
+  .remark-slide thead, .remark-slide tr:nth-child(odd) {
+        background-color:  #84ace8;
+      
+  }
+
+  .remark-slide thead, .remark-slide tr:nth-child(even) {
+        background-color:  #ecf0f1;
+  }
+  
+```
+
+
+
+
+```{r echo=FALSE}
+
+ibov_graph <- PlotaRetornoSemanal(Ibov, "Ibovespa", "B3", .01)
+ibov_graph
+
+```
+
+
+
+```{r echo=FALSE}
+
+ewz_graph <- var_semanal_ewz()
+ewz_graph
+
+```
+  
+
+
+```{r echo=FALSE}
+
+
+sp500_plot <- PlotaRetornoSemanal(SP500, "S&P 500", "FED", .01)
+sp500_plot
+
+```
+
+
+
+```{r echo=FALSE}
+
+
+dolar_graph <- PlotaRetornoSemanal(Dolar, "Dólar", "Banco Central", .01)
+dolar_graph
+
+```
+
+
+```{r echo=FALSE}
+
+
+ggplot(acoes_setores_complete_pt1,
+       aes(x = var_semanal,  y = reorder(nome_acao_setor, +var_semanal), fill = Color)) + 
+  geom_bar(stat = "identity") + 
+  geom_text(aes(label = paste0(format(round(var_semanal*100,2), big.mark = ".", decimal.mark = ","),"%"),
+                hjust = ifelse(var_semanal >= 0, -0.2, 1.3)),size = 2.5,
+            color = 'black',fontface='bold') +
+  scale_fill_manual(values = c("#27ae60","#c0392b")) +
+  geom_hline(yintercept = 5.5, linetype = "dashed") +
+  geom_vline(xintercept = 0) +
+   # geom_segment(x = sum(min(acoes_setores_complete_pt1$var_semanal), tail(acoes_setores_complete_pt1$var_semanal, n=2))/3,
+   #             y = 7,
+   #             xend = sum(min(acoes_setores_complete_pt1$var_semanal), tail(acoes_setores_complete_pt1$var_semanal, n=2))/3,
+   #             yend = 8,
+   #             arrow = arrow(length = unit(0.03, "npc")),
+   #             size = 1.2,
+   #             colour = "#0d7539") +
+  annotate("text", label = "5 Melhores\nPerfomances",
+           x = sum(min(acoes_setores_complete_pt1$var_semanal), tail(acoes_setores_complete_pt1$var_semanal, n=2))/2,
+           y = 7.5,
+           size = 2.5,
+           fontface = "bold",
+           colour = "#0d7539") +
+  # geom_segment(x = sum(max(acoes_setores_complete_pt1$var_semanal), head(acoes_setores_complete_pt1$var_semanal, n=2))/6,
+  #              y = 4,
+  #              xend = sum(max(acoes_setores_complete_pt1$var_semanal), head(acoes_setores_complete_pt1$var_semanal, n=2))/6,
+  #              yend = 3,
+  #              arrow = arrow(length = unit(0.03, "npc")),
+  #              size = 1.2,
+  #              colour = "#831b2c") +
+  annotate("text", label = "5 Piores\nPerfomances",
+           x = sum(max(acoes_setores_complete_pt1$var_semanal), head(acoes_setores_complete_pt1$var_semanal, n=2), 0.02),
+           y = 3.5,
+           size = 2.5,
+           fontface = "bold",
+           colour = "#c0392b") +
+  theme_minimal() +
+  theme(legend.position = "none",
+          strip.text = element_text(face = "bold", color = "#2E2C2F", size = "11"),
+          plot.title = element_text(size=12, hjust = 0.5, face="bold"),
+          axis.title.x = element_text(face="bold", color="#000000",size=8),
+          axis.title.y = element_text(face="bold", color="#000000",size=8),
+          plot.subtitle = element_text(size=9, hjust = 0.5, face="bold"),
+          axis.text.y = element_text(face="bold", color="#000000",size=8),
+          axis.text.x = element_text(face="bold", color="#000000",size=8)) +
+  facet_wrap(~Setor, scales = "free") +
+  scale_x_continuous(labels = scales::percent_format(big.mark = ".", decimal.mark = ",", accuracy = 1),
+                     breaks = seq(min(acoes_setores_complete_pt1$var_semanal)-0.1,
+                                  max(acoes_setores_complete_pt1$var_semanal)+ 0.1,
+                                  0.1),
+                     limits = c(min(acoes_setores_complete_pt1$var_semanal)-0.1,
+                                max(acoes_setores_complete_pt1$var_semanal)+ 0.1)) +
+  labs(title = "As 5 ações com melhores e piores performances da semana, por setor",
+       subtitle = "Variação semanal no valor da ação",
+       x = "Variação na semana (%)",
+       y = "",
+       caption = paste("Fonte: Yahoo Finance! | Elaboração: BP Investimentos\nNota: Apenas ações com movimentação de ao menos R$ 1.000.000,00 por dia.")) +
+    theme_xaringan(text_font_size = 10)
+
+
+
+
+```
+
+
+
+
+```{r echo=FALSE}
+
+
+ggplot(acoes_setores_complete_pt2,aes(x = var_semanal,  y = reorder(nome_acao_setor, +var_semanal), fill = Color)) + 
+  geom_bar(stat = "identity") + 
+  geom_text(aes(label = paste0(format(round(var_semanal*100,2), big.mark = ".", decimal.mark = ","),"%"),
+                hjust = ifelse(var_semanal >= 0, -0.2, 1.3)),size = 2.5,
+            color = 'black',fontface='bold') +
+  scale_fill_manual(values = c("#27ae60","#c0392b")) +
+  geom_hline(yintercept = 5.5, linetype = "dashed") +
+  geom_vline(xintercept = 0) +
+     # geom_segment(x = sum(min(acoes_setores_complete_pt1$var_semanal), tail(acoes_setores_complete_pt1$var_semanal, n=2))/3,
+     #           y = 7,
+     #           xend = sum(min(acoes_setores_complete_pt1$var_semanal), tail(acoes_setores_complete_pt1$var_semanal, n=2))/3,
+     #           yend = 8,
+     #           arrow = arrow(length = unit(0.03, "npc")),
+     #           size = 1.2,
+     #           colour = "#0d7539") +
+  annotate("text", label = "5 Melhores\nPerfomances",
+           x = sum(min(acoes_setores_complete_pt1$var_semanal), tail(acoes_setores_complete_pt1$var_semanal, n=2))/2,
+           y = 7.5,
+           size = 2.5,
+           fontface = "bold",
+           colour = "#0d7539") +
+  # geom_segment(x = sum(max(acoes_setores_complete_pt1$var_semanal), head(acoes_setores_complete_pt1$var_semanal, n=2))/6,
+  #              y = 4,
+  #              xend = sum(max(acoes_setores_complete_pt1$var_semanal), head(acoes_setores_complete_pt1$var_semanal, n=2))/6,
+  #              yend = 3,
+  #              arrow = arrow(length = unit(0.03, "npc")),
+  #              size = 1.2,
+  #              colour = "#831b2c") +
+  annotate("text", label = "5 Piores\nPerfomances",
+           x = sum(max(acoes_setores_complete_pt1$var_semanal), head(acoes_setores_complete_pt1$var_semanal, n=2), 0.02),
+           y = 3.5,
+           size = 2.5,
+           fontface = "bold",
+           colour = "#c0392b") +
+  theme_minimal() +
+   theme(legend.position = "none",
+          strip.text = element_text(face = "bold", color = "#2E2C2F", size = "11"),
+          plot.title = element_text(size=12, hjust = 0.5, face="bold"),
+          axis.title.x = element_text(face="bold", color="#000000",size=8),
+          axis.title.y = element_text(face="bold", color="#000000",size=8),
+          plot.subtitle = element_text(size=9, hjust = 0.5, face="bold"),
+          axis.text.y = element_text(face="bold", color="#000000",size=8),
+          axis.text.x = element_text(face="bold", color="#000000",size=8)) +
+  facet_wrap(~Setor, scales = "free") +
+  scale_x_continuous(labels = scales::percent_format(big.mark = ".", decimal.mark = ",", accuracy = 1),
+                     breaks = seq(min(acoes_setores_complete_pt1$var_semanal)-0.05,
+                                  max(acoes_setores_complete_pt2$var_semanal)+ 0.1,
+                                  0.1),
+                     limits = c(min(acoes_setores_complete_pt1$var_semanal)-0.05,
+                                max(acoes_setores_complete_pt2$var_semanal)+ 0.1)) +
+  # scale_x_continuous(labels = scales::percent_format(big.mark = ".", decimal.mark = ",", accuracy = 1),
+  #                    breaks = seq(min(acoes_setores_complete_pt2$var_semanal)-0.05,
+  #                                 max(acoes_setores_complete_pt2$var_semanal)+ 0.05,
+  #                                 0.05),
+  #                    limits = c(min(acoes_setores_complete_pt2$var_semanal)-0.05,
+  #                               max(acoes_setores_complete_pt2$var_semanal)+ 0.05)) +
+  labs(title = "As 5 ações com melhores e piores performances da semana, por setor",
+              subtitle = "Variação semanal no valor da ação",
+       x = "Variação na semana (%)",
+       y = "",
+       caption = paste("Fonte: Yahoo Finance! | Elaboração: BP Investimentos\nNota: Apenas ações com movimentação de ao menos R$ 1.000.000,00 por dia.")) +
+    theme_xaringan(text_font_size = 10)
+
+
+```
+
+
+
+```{r echo=FALSE}
+
+ggplot(dataset_indices, aes(x=date,y = ret_acum)) + 
+    theme_minimal() +
+    geom_line(size=1, colour = "#ffa600") +
+    labs(title = "Retorno dos índices de Economias selecionadas",
+         caption = "Fonte: Yahoo! Finance | Elaboração: BP Investimentos", colour = "Indicador: ",
+         x = "",
+         y = "Retorno acumulado (%)") +
+   theme(legend.position = "none",
+          strip.text = element_text(face = "bold", color = "#2E2C2F", size = 7),
+          plot.title = element_text(size=12, hjust = 0.5, face="bold"),
+          axis.title.x = element_text(face="bold", color="#000000",size=8),
+          axis.title.y = element_text(face="bold", color="#000000",size=8),
+          plot.subtitle = element_text(size=9, hjust = 0.5, face="bold"),
+          axis.text.y = element_text(face="bold", color="#000000",size=8),
+          axis.text.x = element_text(face="bold", color="#000000",size=8)) +
+    geom_hline(yintercept = 0, linetype ="longdash") +
+    scale_x_date(date_labels = "%b\n%Y", breaks = "2 month") +
+    facet_wrap(~indice, nrow = 2) +
+    scale_y_continuous(labels = scales::percent_format(big.mark = ".", decimal.mark = ","),
+                       breaks = seq(-0.1,0.4,0.1),
+                       limits = c(-0.1,0.4)) +
+    theme_xaringan(text_font_size = 10)
+
+
+```
+
+
+```{r echo=FALSE}
+
+ ggplot(all_bounds_gather, aes(x = date, y = rendimento, colour = titulo_ano)) +
+  geom_line(size = 1.1) +
+  labs(y="%", x="", fill="",
+       title = "Rendimento dos títulos de 5, 10 e 30 anos do Tesouro Americano",
+       subtitle = "Jan/2020 - Out/2021",
+       caption = "Fonte: FED | Elaboração: BP Investimentos",
+       colour = "") +
+  theme_minimal() +
+ theme(legend.position = "bottom",
+          strip.text = element_text(face = "bold", color = "#2E2C2F", size = 7),
+          plot.title = element_text(size=12, hjust = 0.5, face="bold"),
+          axis.title.x = element_text(face="bold", color="#000000",size=8),
+          axis.title.y = element_text(face="bold", color="#000000",size=8),
+          plot.subtitle = element_text(size=9, hjust = 0.5, face="bold"),
+          axis.text.y = element_text(face="bold", color="#000000",size=8),
+          axis.text.x = element_text(face="bold", color="#000000",size=8)) +
+  scale_color_manual(values = c("#003f5c", "#bc5090", "#ffa600"),
+                     drop = FALSE,
+                     guide = guide_legend(
+                      direction = "horizontal",
+                      keyheight = unit(2, units = "mm"), 
+                      keywidth = unit(35/length(labels), units = "mm"),
+                      title.position = 'top',
+                      title.hjust = 0.5,
+                      label.hjust = 0.5,
+                      nrow = 1,
+                      byrow = TRUE,
+                      reverse = FALSE,
+                      label.position = "bottom")) +
+  scale_y_continuous(breaks = c(0.1,0.5,1,1.5,2,2.5),
+                     labels = c("0,1","0,5","1,0","1,5","2,0","2,5"),
+                     limits = c(0.1,2.5)) +
+  scale_x_date(date_labels = "%b\n%Y", breaks = "1 month") +
+    theme_xaringan(text_font_size = 10)
+
+
+```
+
+
+
+```{r echo=FALSE}
+
+grid.arrange(ferro_graph, brent_graph, ncol = 2)
+
+```
+
+
+
+
+```{r echo=FALSE}
+
+grid.arrange(soja_graph, milho_graph, ncol = 2)
+
+```
+
+
+
+
+```{r echo=FALSE}
+
+grid.arrange(algodao_graph, boi_graph, ncol = 2)
+
+```
+
+
+
+```{r echo=FALSE}
+
+ntnb_graph
+
+```
+
+
+
+```{r echo=FALSE}
+
+ntnf_graph
+
+```
+
+
+
+```{r echo=FALSE}
+
+plot_curvas_pre 
+
+```
+
+
+
+```{r echo=FALSE}
+
+
+grid.arrange(inf_mensal_graph, inf_12meses_graph, ncol = 2)
+
+
+```
+
+
+
+```{r echo=FALSE}
+
+
+vertical_sep_ipca
+
+
+```
+
+
+
+
+
+
