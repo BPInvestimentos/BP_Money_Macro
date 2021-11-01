@@ -2,6 +2,13 @@
 output: html_document
 ---
 
+<script>
+   $(document).ready(function() {
+     $head = $('#header');
+     $head.prepend('<img src=\"bp_money_barra.jpg\" style=\"float: right:800px;width: 1600px;\"/>')
+   });
+</script>
+
 
 ```{r, include=FALSE, warning=FALSE}
 
@@ -66,11 +73,11 @@ options(scipen = 999)
 ```{r, include=FALSE, warning=FALSE}
 
 # segunda-feira
-dt_inicio_semana = as.Date("2021-10-18")
+dt_inicio_semana = as.Date("2021-10-25")
 
 # sexta-feira
-dt_fim_semana = as.Date("2021-10-22")
-dt_commoditie_final_semana = "22/10/2021"
+dt_fim_semana = as.Date("2021-10-29")
+dt_commoditie_final_semana = "29/10/2021"
 
 
 #setwd("C:\\Users\\pc\\Desktop\\BP_Investimentos\\BPMacro\\docs")
@@ -153,7 +160,7 @@ PlotaRetornoSemanal <- function(Tabela, Nome, Fonte, step) {
     ggplot(Tabela, aes(x = Semana,  y = VarSemanal, fill = Color)) + 
     geom_col() + 
     geom_text(aes(label = paste0(format(round(VarSemanal*100,2), big.mark = ".", decimal.mark = ","),"%"),
-                  vjust = ifelse(VarSemanal >= 0, -0.5, 1.5)),size = 3,
+                  vjust = ifelse(VarSemanal >= 0, -0.5, 1.5)),size = 2.5,
                   color = 'black',fontface='bold') +
     scale_fill_manual(values = c("#27ae60","#c0392b")) +
     geom_hline(yintercept = 0) +
@@ -225,7 +232,7 @@ var_semanal_ewz <- function() {
   graph_ewz <- ggplot(ewz_fil_var, aes(x = semana,  y = var_semanal, fill = Color)) + 
     geom_col() + 
     geom_text(aes(label = paste0(format(round(var_semanal*100,2), big.mark = ".", decimal.mark = ","),"%"),
-                  vjust = ifelse(var_semanal >= 0, -0.5, 1.5)),size = 3,
+                  vjust = ifelse(var_semanal >= 0, -0.5, 1.5)),size = 2.5,
               color = 'black',fontface='bold') +
    scale_fill_manual(values = c("#27ae60","#c0392b")) +
     geom_hline(yintercept = 0) +
@@ -608,8 +615,8 @@ brent_graph <- ggplot(brent_futuro, aes(x = data, y = Close)) +
   scale_y_continuous(labels = scales::dollar_format(prefix = "US$",
                                                     big.mark = ".",
                                                     decimal.mark = ","),
-                     breaks = c(15,25,35,45,55,65,75,85),
-                     limits = c(15,85)) +
+                     breaks = c(15,25,35,45,55,65,75,85,95),
+                     limits = c(15,95)) +
   scale_x_date(date_labels = "%b\n%Y", breaks = "3 month") +
   theme_xaringan(text_font_size = 10)
 
@@ -1079,9 +1086,10 @@ scale_colour_manual(values = c("#173F5F", "#20639B", "#3CAEA3", "#F6D55C", "#ED5
 ### gráfico -----
 
 
-curva_seg <- read.csv2("curva-pre_2021-10-15.csv")
 
-curva_sex <- read.csv2("curva-pre_2021-10-22.csv")
+curva_seg <- read.csv2("curva-pre_2021-10-22.csv")
+
+curva_sex <- read.csv2("curva-pre_2021-10-29.csv")
 
 
 
@@ -1330,7 +1338,7 @@ vertical_sep_ipca <- ggplot(contribuicao2, aes(x=variação,y=setor,fill=Color))
   facet_wrap(~mes, ncol = 4) +
   geom_text(aes(x = variação + 0.08 * sign(variação), label= round(variação,4)), 
             position = position_dodge(width = 0.9), 
-            size = 1.8, color = 'black',fontface='bold') +
+            size = 2, color = 'black',fontface='bold') +
   theme_minimal() +
   theme(plot.title = element_text(face="bold", size = 12),
         plot.subtitle = element_text(face="italic", size = 8),
